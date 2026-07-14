@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
+export interface TeraboxResolveInput {
+  /** A TeraBox share URL, e.g. https://terasharefile.com/s/xxxx */
+  url: string;
 }

@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: terabox
+    description: TeraBox share resolution and download link operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,81 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /terabox/cookie-status:
+    get:
+      operationId: getTeraboxCookieStatus
+      tags: [terabox]
+      summary: Check TeraBox session cookie health
+      description: Reports whether the configured TeraBox session cookie is still valid.
+      responses:
+        "200":
+          description: Cookie status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeraboxCookieStatus"
+  /terabox/resolve:
+    post:
+      operationId: resolveTeraboxShare
+      tags: [terabox]
+      summary: Resolve a TeraBox share link
+      description: Given a TeraBox share URL (any mirror domain), returns the share title and the full file/folder tree, recursing into nested subfolders.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeraboxResolveInput"
+      responses:
+        "200":
+          description: Resolved share
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeraboxShare"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Could not resolve the share
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /terabox/download-link:
+    post:
+      operationId: createTeraboxDownloadLink
+      tags: [terabox]
+      summary: Get a direct TeraBox download URL for one or more files in a share
+      description: Given the original share URL and the fs_id list of the files to download (a single id, or several to receive a zip), returns a signed TeraBox CDN URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeraboxDownloadInput"
+      responses:
+        "200":
+          description: Signed download link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeraboxDownloadLink"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Could not create the download link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +110,99 @@ components:
           type: string
       required:
         - status
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    TeraboxCookieStatus:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        reason:
+          type: string
+      required:
+        - valid
+        - reason
+    TeraboxNode:
+      type: object
+      description: A file or folder within a resolved share.
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        isDir:
+          type: boolean
+        size:
+          type: number
+        fsId:
+          type: string
+        children:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/TeraboxNode"
+      required:
+        - name
+        - path
+        - isDir
+        - size
+        - fsId
+    TeraboxResolveInput:
+      type: object
+      properties:
+        url:
+          type: string
+          description: A TeraBox share URL, e.g. https://terasharefile.com/s/xxxx
+      required:
+        - url
+    TeraboxShare:
+      type: object
+      properties:
+        title:
+          type: string
+        fileCount:
+          type: number
+        totalSize:
+          type: number
+        tree:
+          type: array
+          items:
+            $ref: "#/components/schemas/TeraboxNode"
+      required:
+        - title
+        - fileCount
+        - totalSize
+        - tree
+    TeraboxDownloadInput:
+      type: object
+      properties:
+        url:
+          type: string
+          description: The original share URL passed to resolve.
+        fsIds:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        filename:
+          type: string
+          description: Suggested filename for the download.
+      required:
+        - url
+        - fsIds
+    TeraboxDownloadLink:
+      type: object
+      properties:
+        downloadUrl:
+          type: string
+          description: Signed TeraBox CDN URL to download the file(s) directly. The frontend should navigate/link to this URL as-is (it is not same-origin) so the browser performs the fetch from the user's own IP.
+        isZip:
+          type: boolean
+      required:
+        - downloadUrl
+        - isZip
 
