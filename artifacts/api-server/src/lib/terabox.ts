@@ -59,17 +59,36 @@ function parseCookieHeader(raw: string) {
 
 let browserPromise: Promise<Browser> | null = null;
 
+function buildProxyConfig():
+  | { server: string; username?: string; password?: string }
+  | undefined {
+  const raw = process.env.PLAYWRIGHT_PROXY;
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    const server = `${url.protocol}//${url.hostname}:${url.port}`;
+    const username = url.username ? decodeURIComponent(url.username) : undefined;
+    const password = url.password ? decodeURIComponent(url.password) : undefined;
+    console.log(`[proxy] using ${server} username=${username ?? "(none)"}`);
+    return { server, username, password };
+  } catch {
+    // plain host:port with no credentials
+    console.log(`[proxy] using raw server: ${raw}`);
+    return { server: raw };
+  }
+}
+
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     const executablePath =
       process.env.REPLIT_PLAYWRIGHT_CHROMIUM_EXECUTABLE ||
       process.env.PLAYWRIGHT_EXECUTABLE_PATH ||
       undefined;
-    const proxyServer = process.env.PLAYWRIGHT_PROXY;
+    const proxy = buildProxyConfig();
     browserPromise = chromium
       .launch({
         executablePath,
-        proxy: proxyServer ? { server: proxyServer } : undefined,
+        proxy,
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
