@@ -276,6 +276,11 @@ interface ListParams {
 
 async function captureListParams(page: Page, url: string): Promise<ListParams> {
   let listParams: ListParams | null = null;
+  let sawLoginRedirect = false;
+  let foundResolve: (() => void) | undefined;
+  const found = new Promise<void>((resolve) => {
+    foundResolve = resolve;
+  });
   const onResponse = (res: import("playwright-core").Response) => {
     const resUrl = res.url();
     if (!listParams && resUrl.includes("/share/list")) {
@@ -289,12 +294,24 @@ async function captureListParams(page: Page, url: string): Promise<ListParams> {
         clienttype: u.searchParams.get("clienttype") ?? "",
         web: u.searchParams.get("web") ?? "",
       };
+      foundResolve?.();
     }
   };
   page.on("response", onResponse);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await page.waitForTimeout(3500);
+    // Don't rely on a fixed sleep: on slower/cloud egress networks (e.g. a
+    // Render datacenter reaching TeraBox's servers) the /share/list XHR can
+    // take much longer to fire than it does from a fast dev connection. Wait
+    // for the response itself, up to a generous ceiling, instead of racing a
+    // short fixed timeout.
+    await Promise.race([found, page.waitForTimeout(20000)]);
+    const finalUrl = page.url();
+    sawLoginRedirect =
+      finalUrl.includes("/login") ||
+      finalUrl.includes("/signin") ||
+      finalUrl.includes("passport") ||
+      finalUrl.includes("account/login");
   } catch (err) {
     throw new TeraboxError(
       `Could not load the share page: ${err instanceof Error ? err.message : String(err)}`,
@@ -303,8 +320,16 @@ async function captureListParams(page: Page, url: string): Promise<ListParams> {
     page.off("response", onResponse);
   }
   if (!listParams) {
+    if (sawLoginRedirect) {
+      throw new TeraboxError(
+        "TeraBox redirected to a login page instead of loading the share — the TERABOX_COOKIE session is expired or banned. Refresh TERABOX_COOKIE with a fresh browser session cookie.",
+        400,
+      );
+    }
     throw new TeraboxError(
-      "This does not look like a valid TeraBox share link, or the share is unavailable.",
+      "This does not look like a valid TeraBox share link, or the share is unavailable. " +
+        "If this link works from a browser but keeps failing here, TeraBox may be blocking this server's " +
+        "IP address (common for datacenter IPs on hosts like Render) — set PLAYWRIGHT_PROXY to a residential/ISP proxy URL to route around it.",
       400,
     );
   }
