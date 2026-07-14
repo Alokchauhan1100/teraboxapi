@@ -20,8 +20,6 @@ COPY lib/       lib/
 COPY scripts/   scripts/
 COPY artifacts/api-server/ artifacts/api-server/
 
-RUN pnpm --filter @workspace/api-zod      run build
-RUN pnpm --filter @workspace/db           run build
 RUN pnpm --filter @workspace/api-server   run build
 
 ENV NODE_ENV=production
