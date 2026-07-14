@@ -11,6 +11,10 @@ const COOKIE_DOMAINS = [
   ".terasharefile.com",
   ".1024terabox.com",
   ".teraboxurl.com",
+  ".teraboxlink.com",
+  ".4funbox.com",
+  ".momerybox.com",
+  ".teraboxapp.com",
 ];
 
 const USER_AGENT =
@@ -57,13 +61,19 @@ let browserPromise: Promise<Browser> | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
-    const executablePath = process.env.REPLIT_PLAYWRIGHT_CHROMIUM_EXECUTABLE;
+    const executablePath =
+      process.env.REPLIT_PLAYWRIGHT_CHROMIUM_EXECUTABLE ||
+      process.env.PLAYWRIGHT_EXECUTABLE_PATH ||
+      undefined;
+    const proxyServer = process.env.PLAYWRIGHT_PROXY;
     browserPromise = chromium
       .launch({
         executablePath,
+        proxy: proxyServer ? { server: proxyServer } : undefined,
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
           "--disable-blink-features=AutomationControlled",
         ],
       })
@@ -262,8 +272,8 @@ async function captureListParams(page: Page, url: string): Promise<ListParams> {
   };
   page.on("response", onResponse);
   try {
-    await page.goto(url, { waitUntil: "load", timeout: 45000 });
-    await page.waitForTimeout(2500);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.waitForTimeout(3500);
   } catch (err) {
     throw new TeraboxError(
       `Could not load the share page: ${err instanceof Error ? err.message : String(err)}`,

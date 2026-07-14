@@ -21,7 +21,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const TERABOX_URL_RE =
-  /https?:\/\/[^\s]*(1024tera|terabox|terasharefile|1024terabox|teraboxurl|4funbox|momerybox|teraboxapp)[^\s]*/i;
+  /https?:\/\/[^\s]*(1024tera|terabox|terasharefile|1024terabox|teraboxurl|4funbox|momerybox|teraboxapp|teraboxlink)[^\s]*/i;
 
 const MAX_FILES_SHOWN = 20;
 const SUPPORTED_DOMAINS = [
@@ -33,6 +33,7 @@ const SUPPORTED_DOMAINS = [
   "4funbox.com",
   "momerybox.com",
   "teraboxapp.com",
+  "teraboxlink.com",
 ];
 
 // ---------------------------------------------------------------------------
