@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/.tsbuildinfo
+**/dist
+attached_assets
+artifacts/mockup-sandbox
+.git
+.local
+*.zip
