@@ -564,6 +564,24 @@ async function triggerDownload(
   // immediately after the last checkbox can race with that update.
   await page.waitForTimeout(1200);
 
+  // TeraBox occasionally shows an interstitial (cookie/consent banner, "get
+  // the app" promo, login nag) that sits on top of the real download button.
+  // These are best-effort dismissals — harmless no-ops if none are present.
+  const dismissSelectors = [
+    '[class*="dialog"] [class*="close"]',
+    '[class*="modal"] [class*="close"]',
+    '.wp-s-pop-close',
+    '.g-dialog-close',
+    'button:has-text("Not now")',
+    'button:has-text("Cancel")',
+  ];
+  for (const sel of dismissSelectors) {
+    const el = page.locator(sel).first();
+    if (await el.count().catch(() => 0)) {
+      await el.click({ timeout: 1500 }).catch(() => {});
+    }
+  }
+
   let captured: DownloadResult | null = null;
   const apiErrorBox: { value: { errno: number; msg?: string } | null } = { value: null };
   const seen: { url: string; status: number; body: string }[] = [];
@@ -595,11 +613,32 @@ async function triggerDownload(
     }
   };
   page.on("response", onResponse);
+  // Single-file preview pages sometimes render more than one element that
+  // matches a plain "Download" text match (e.g. a promo banner's "Download
+  // App" button alongside the real per-file download action). Try each
+  // candidate in order, and click a couple of times if the first attempt
+  // produces no matching network response — TeraBox's UI occasionally needs
+  // a first click to reveal a submenu ("Download to computer") and a second
+  // to actually fire the request.
+  const buttonCandidates = [
+    'button:has-text("Download")',
+    '[class*="download"][class*="btn"]',
+    '[class*="download-btn"]',
+    'a:has-text("Download")',
+  ];
   try {
-    const downloadBtn = page.locator('button:has-text("Download")').first();
-    await downloadBtn.scrollIntoViewIfNeeded().catch(() => {});
-    await downloadBtn.click({ timeout: 10000, force: true });
-    await page.waitForTimeout(6000);
+    for (let round = 0; round < 2 && !captured; round++) {
+      for (const sel of buttonCandidates) {
+        if (captured) break;
+        const btn = page.locator(sel).first();
+        const present = await btn.count().catch(() => 0);
+        if (!present) continue;
+        await btn.scrollIntoViewIfNeeded().catch(() => {});
+        await btn.click({ timeout: 10000, force: true }).catch(() => {});
+        await page.waitForTimeout(3500);
+        if (captured) break;
+      }
+    }
   } finally {
     page.off("response", onResponse);
   }
@@ -611,7 +650,14 @@ async function triggerDownload(
         fsIdsCount: fsIds.size,
         seenResponses: seen,
         pageUrl: page.url(),
+        pageTitle: await page.title().catch(() => undefined),
         apiError: apiErrorBox.value,
+        downloadButtonCounts: await Promise.all(
+          buttonCandidates.map(async (sel) => ({
+            sel,
+            count: await page.locator(sel).count().catch(() => -1),
+          })),
+        ),
       },
       "TeraBox triggerDownload: no dlink captured",
     );
