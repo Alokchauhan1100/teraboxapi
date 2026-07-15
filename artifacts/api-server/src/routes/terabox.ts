@@ -5,8 +5,16 @@ import {
   CreateTeraboxDownloadLinkBody,
   CreateTeraboxDownloadLinkResponse,
   GetTeraboxCookieStatusResponse,
+  ResolveTeraboxDlinksBody,
+  ResolveTeraboxDlinksResponse,
 } from "@workspace/api-zod";
-import { resolveShare, resolveDownload, checkCookieHealth, TeraboxError } from "../lib/terabox";
+import {
+  resolveShare,
+  resolveDownload,
+  resolveAllDownloadLinks,
+  checkCookieHealth,
+  TeraboxError,
+} from "../lib/terabox";
 
 const router: IRouter = Router();
 
@@ -85,6 +93,36 @@ router.post(
     }
   },
 );
+
+router.post("/terabox/dlinks", async (req: Request, res: Response): Promise<void> => {
+  const parsed = ResolveTeraboxDlinksBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  try {
+    const { title, files } = await resolveAllDownloadLinks(parsed.data.url);
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    req.log.info({ fileCount: files.length }, "Resolved terabox dlinks");
+    res.json(
+      ResolveTeraboxDlinksResponse.parse({
+        title,
+        fileCount: files.length,
+        totalSize,
+        files,
+      }),
+    );
+  } catch (err) {
+    if (err instanceof TeraboxError) {
+      req.log.warn({ err: err.message }, "Failed to resolve terabox dlinks");
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    req.log.error({ err }, "Unexpected error resolving terabox dlinks");
+    res.status(502).json({ error: "Could not resolve this share link." });
+  }
+});
 
 /**
  * GET /api/terabox/cookie-status

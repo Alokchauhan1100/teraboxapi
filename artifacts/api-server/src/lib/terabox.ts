@@ -852,6 +852,51 @@ export async function downloadFromSession(
   };
 }
 
+export interface ResolvedDlinkFile {
+  name: string;
+  path: string;
+  size: number;
+  fsId: string;
+  downloadLink: string;
+}
+
+/**
+ * Resolves a share straight through to raw download links for every file,
+ * recursing into nested subfolders. Opens one session and reuses it across
+ * every file (same rationale as the "download all" bot flow: a single
+ * page/session for the whole batch is both faster and far less likely to
+ * get throttled than opening a fresh browser per file).
+ */
+export async function resolveAllDownloadLinks(
+  url: string,
+): Promise<{ title: string; files: ResolvedDlinkFile[] }> {
+  const session = await openShareSession(url);
+  try {
+    const title = await session.page.title().catch(() => "TeraBox share");
+    const files = flatten(session.tree).filter((n) => !n.isDir);
+    const results: ResolvedDlinkFile[] = [];
+    for (const file of files) {
+      const target = await downloadFromSession(session, [file.fsId], file.name);
+      const ancestorNames = session.ancestorMap.get(file.fsId) ?? [];
+      results.push({
+        name: file.name,
+        path: "/" + ancestorNames.join("/"),
+        size: file.size,
+        fsId: file.fsId,
+        downloadLink: target.url,
+      });
+      // Same reasoning as the bot's "download all" flow: a small randomized
+      // pause between files looks less like a bot hammering the same share.
+      if (files.length > 1) {
+        await new Promise((r) => setTimeout(r, 500 + Math.random() * 800));
+      }
+    }
+    return { title: title || "TeraBox share", files: results };
+  } finally {
+    await closeShareSession(session);
+  }
+}
+
 /**
  * Convenience one-shot wrapper: opens a session, downloads a single target,
  * closes the session. Use openShareSession + downloadFromSession directly

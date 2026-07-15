@@ -58,3 +58,23 @@ export interface TeraboxDownloadLink {
   isZip: boolean;
 }
 
+/**
+ * A single file within a resolved share, with its direct download URL already resolved.
+ */
+export interface TeraboxDlinkFile {
+  name: string;
+  /** Folder path within the share, e.g. "/post 357/bonus videos". */
+  path: string;
+  size: number;
+  fsId: string;
+  /** Signed TeraBox CDN URL. Use as-is; do not proxy the bytes through this server. */
+  downloadLink: string;
+}
+
+export interface TeraboxDlinksResponse {
+  title: string;
+  fileCount: number;
+  totalSize: number;
+  files: TeraboxDlinkFile[];
+}
+

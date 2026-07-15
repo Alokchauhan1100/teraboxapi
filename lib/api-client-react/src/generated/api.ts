@@ -23,6 +23,7 @@ import type {
   ErrorResponse,
   HealthStatus,
   TeraboxCookieStatus,
+  TeraboxDlinksResponse,
   TeraboxDownloadInput,
   TeraboxDownloadLink,
   TeraboxResolveInput,
@@ -354,5 +355,77 @@ export const useCreateTeraboxDownloadLink = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getCreateTeraboxDownloadLinkMutationOptions(options));
+    }
+
+export const getResolveTeraboxDlinksUrl = () => {
+
+
+
+
+  return `/api/terabox/dlinks`
+}
+
+/**
+ * Given a TeraBox share URL (any mirror domain), recurses into every nested subfolder and returns a flat list of every file with its direct, signed download URL. Convenience wrapper around resolve + download-link for callers that just want every dlink in one call.
+ * @summary Resolve a TeraBox share link straight to raw download links
+ */
+export const resolveTeraboxDlinks = async (teraboxResolveInput: TeraboxResolveInput, options?: RequestInit): Promise<TeraboxDlinksResponse> => {
+
+  return customFetch<TeraboxDlinksResponse>(getResolveTeraboxDlinksUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(teraboxResolveInput)
+  }
+);}
+
+
+
+
+
+export const getResolveTeraboxDlinksMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resolveTeraboxDlinks>>, TError,{data: BodyType<TeraboxResolveInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof resolveTeraboxDlinks>>, TError,{data: BodyType<TeraboxResolveInput>}, TContext> => {
+
+const mutationKey = ['resolveTeraboxDlinks'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof resolveTeraboxDlinks>>, {data: BodyType<TeraboxResolveInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  resolveTeraboxDlinks(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ResolveTeraboxDlinksMutationResult = NonNullable<Awaited<ReturnType<typeof resolveTeraboxDlinks>>>
+    export type ResolveTeraboxDlinksMutationBody = BodyType<TeraboxResolveInput>
+    export type ResolveTeraboxDlinksMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Resolve a TeraBox share link straight to raw download links
+ */
+export const useResolveTeraboxDlinks = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resolveTeraboxDlinks>>, TError,{data: BodyType<TeraboxResolveInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof resolveTeraboxDlinks>>,
+        TError,
+        {data: BodyType<TeraboxResolveInput>},
+        TContext
+      > => {
+      return useMutation(getResolveTeraboxDlinksMutationOptions(options));
     }
 

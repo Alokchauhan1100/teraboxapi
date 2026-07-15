@@ -101,6 +101,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /terabox/dlinks:
+    post:
+      operationId: resolveTeraboxDlinks
+      tags: [terabox]
+      summary: Resolve a TeraBox share link straight to raw download links
+      description: Given a TeraBox share URL (any mirror domain), recurses into every nested subfolder and returns a flat list of every file with its direct, signed download URL. Convenience wrapper around resolve + download-link for callers that just want every dlink in one call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TeraboxResolveInput"
+      responses:
+        "200":
+          description: All files with direct download links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeraboxDlinksResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Could not resolve the share or one of its download links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -205,4 +236,44 @@ components:
       required:
         - downloadUrl
         - isZip
+    TeraboxDlinkFile:
+      type: object
+      description: A single file within a resolved share, with its direct download URL already resolved.
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+          description: Folder path within the share, e.g. "/post 357/bonus videos".
+        size:
+          type: number
+        fsId:
+          type: string
+        downloadLink:
+          type: string
+          description: Signed TeraBox CDN URL. Use as-is; do not proxy the bytes through this server.
+      required:
+        - name
+        - path
+        - size
+        - fsId
+        - downloadLink
+    TeraboxDlinksResponse:
+      type: object
+      properties:
+        title:
+          type: string
+        fileCount:
+          type: number
+        totalSize:
+          type: number
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/TeraboxDlinkFile"
+      required:
+        - title
+        - fileCount
+        - totalSize
+        - files
 

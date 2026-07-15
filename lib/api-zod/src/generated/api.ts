@@ -69,3 +69,25 @@ export const CreateTeraboxDownloadLinkResponse = zod.object({
 })
 
 
+/**
+ * Given a TeraBox share URL (any mirror domain), recurses into every nested subfolder and returns a flat list of every file with its direct, signed download URL. Convenience wrapper around resolve + download-link for callers that just want every dlink in one call.
+ * @summary Resolve a TeraBox share link straight to raw download links
+ */
+export const ResolveTeraboxDlinksBody = zod.object({
+  "url": zod.string().describe('A TeraBox share URL, e.g. https:\/\/terasharefile.com\/s\/xxxx')
+})
+
+export const ResolveTeraboxDlinksResponse = zod.object({
+  "title": zod.string(),
+  "fileCount": zod.number(),
+  "totalSize": zod.number(),
+  "files": zod.array(zod.object({
+  "name": zod.string(),
+  "path": zod.string().describe('Folder path within the share, e.g. \"\/post 357\/bonus videos\".'),
+  "size": zod.number(),
+  "fsId": zod.string(),
+  "downloadLink": zod.string().describe('Signed TeraBox CDN URL. Use as-is; do not proxy the bytes through this server.')
+}).describe('A single file within a resolved share, with its direct download URL already resolved.'))
+})
+
+
