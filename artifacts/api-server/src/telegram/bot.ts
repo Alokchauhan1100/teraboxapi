@@ -5,8 +5,12 @@ import {
   resolveDownload,
   downloadDlinkViaBrowser,
   checkCookieHealth,
+  openShareSession,
+  downloadFromSession,
+  closeShareSession,
   TeraboxError,
   type TeraboxNode,
+  type ShareSession,
 } from "../lib/terabox";
 import { isMtprotoConfigured, sendVideoDirect } from "../lib/telegramClient";
 import {
@@ -117,6 +121,7 @@ async function downloadAndSend(
   shareUrl: string,
   file: FlatFile,
   statusMsgId: number | null,
+  session?: ShareSession,
 ): Promise<"sent" | "linked"> {
   const editStatus = async (text: string) => {
     if (!statusMsgId) return;
@@ -125,9 +130,14 @@ async function downloadAndSend(
 
   let target: { url: string; isZip: boolean; filename: string };
   try {
-    target = await resolveDownload(shareUrl, [file.fsId], file.label);
+    target = session
+      ? await downloadFromSession(session, [file.fsId], file.label)
+      : await resolveDownload(shareUrl, [file.fsId], file.label);
   } catch (err) {
-    const msg = err instanceof TeraboxError ? err.message : "Could not resolve this file.";
+    const msg =
+      err instanceof TeraboxError
+        ? err.message
+        : `Unexpected error resolving this file (${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}).`;
     await editStatus(`⚠️ ${file.label}: ${msg}`);
     return "linked";
   }
@@ -350,25 +360,56 @@ export function startTelegramBot(): Bot | null {
         let sent = 0;
         let linked = 0;
 
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i]!;
-          const progressMsg = await ctx.api
-            .sendMessage(chatId, `⏳ *File ${i + 1}/${files.length}:* ${file.label}`, { parse_mode: "Markdown" })
-            .catch(() => null);
+        // Resolve the share ONCE and reuse the same browser session for
+        // every file in the batch, instead of reloading the share page and
+        // re-walking its whole file tree per file. Besides being much
+        // faster, hitting TeraBox with a fresh browser context per file in
+        // quick succession looks bot-like and risks the share getting
+        // throttled partway through — this keeps the batch to a single page
+        // load, which behaves like a normal user browsing once and
+        // downloading several files.
+        let batchSession: ShareSession | null = null;
+        try {
+          batchSession = await openShareSession(session.url);
+        } catch (err) {
+          logger.warn({ err }, "Batch download: could not open share session, falling back to per-file resolve");
+        }
 
-          const result = await downloadAndSend(bot, chatId, session.url, file, progressMsg?.message_id ?? null);
-          if (result === "sent") sent++;
-          else linked++;
+        try {
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i]!;
+            const progressMsg = await ctx.api
+              .sendMessage(chatId, `⏳ *File ${i + 1}/${files.length}:* ${file.label}`, { parse_mode: "Markdown" })
+              .catch(() => null);
 
-          // Update the top progress bar
-          await ctx.api
-            .editMessageText(
+            const result = await downloadAndSend(
+              bot,
               chatId,
-              status.message_id,
-              `📦 *Downloading all ${files.length} file(s)…*\n${progressBar(i + 1, files.length)} ${i + 1}/${files.length}`,
-              { parse_mode: "Markdown" },
-            )
-            .catch(() => {});
+              session.url,
+              file,
+              progressMsg?.message_id ?? null,
+              batchSession ?? undefined,
+            );
+            if (result === "sent") sent++;
+            else linked++;
+
+            // Update the top progress bar
+            await ctx.api
+              .editMessageText(
+                chatId,
+                status.message_id,
+                `📦 *Downloading all ${files.length} file(s)…*\n${progressBar(i + 1, files.length)} ${i + 1}/${files.length}`,
+                { parse_mode: "Markdown" },
+              )
+              .catch(() => {});
+
+            // Small human-like pause between files (skip after the last one).
+            if (i < files.length - 1) {
+              await new Promise((r) => setTimeout(r, 800 + Math.random() * 700));
+            }
+          }
+        } finally {
+          if (batchSession) await closeShareSession(batchSession);
         }
 
         const summary =

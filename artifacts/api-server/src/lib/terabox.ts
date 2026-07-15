@@ -490,6 +490,58 @@ export async function resolveShare(url: string): Promise<ResolvedShare> {
   throw lastErr;
 }
 
+// ---------------------------------------------------------------------------
+// Reusable share session — lets a caller resolve a share ONCE and then
+// download several files from it without re-opening a browser, reloading the
+// share page, and re-walking the whole file tree for every single file.
+//
+// This matters beyond performance: hammering the same share link with a
+// brand-new browser context + full page load for every file in a "download
+// all" batch looks nothing like normal human browsing and is exactly the
+// pattern anti-bot/rate-limiting systems key on. Reusing one session for the
+// whole batch (one page load, one tree walk, then just clicking between
+// files) is both faster and far less likely to get throttled or blocked
+// partway through a batch.
+// ---------------------------------------------------------------------------
+
+export interface ShareSession {
+  context: BrowserContext;
+  page: Page;
+  tree: TeraboxNode[];
+  ancestorMap: AncestorMap;
+}
+
+export async function openShareSession(url: string): Promise<ShareSession> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_RESOLVE_ATTEMPTS; attempt++) {
+    const context = await newContext();
+    try {
+      const page = await context.newPage();
+      const params = await captureListParams(page, url);
+      const ancestorMap: AncestorMap = new Map();
+      const tree = await walk(page, params, "/", 0, [], ancestorMap);
+      return { context, page, tree, ancestorMap };
+    } catch (err) {
+      await context.close().catch(() => {});
+      lastErr = err;
+      if (attempt < MAX_RESOLVE_ATTEMPTS && isTransientNetworkError(err)) {
+        logger.warn(
+          { attempt, url },
+          "TeraBox openShareSession hit a transient network error, retrying",
+        );
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+export async function closeShareSession(session: ShareSession): Promise<void> {
+  await session.context.close().catch(() => {});
+}
+
 function flatten(nodes: TeraboxNode[]): TeraboxNode[] {
   const out: TeraboxNode[] = [];
   for (const n of nodes) {
@@ -508,8 +560,20 @@ async function navigateIntoFolder(page: Page, ancestorNames: string[]): Promise<
     const row = page.locator(".file-item-name", { hasText: name }).first();
     const isPresent = await row.count().catch(() => 0);
     if (isPresent > 0) {
-      await row.click({ timeout: 10000 });
-      await page.waitForTimeout(1200);
+      try {
+        await row.click({ timeout: 10000 });
+        await page.waitForTimeout(1200);
+      } catch (err) {
+        // Surface this as a clear, actionable TeraboxError instead of a raw
+        // Playwright timeout — the generic catch in bot.ts collapses any
+        // non-TeraboxError into an unhelpful "Could not resolve this file."
+        // This most often happens when a share's folder layout shifts
+        // between resolving the list and clicking into it (e.g. mid-batch
+        // download of many files back to back).
+        throw new TeraboxError(
+          `Could not navigate into folder "${name}" — the page layout may have changed. Please re-resolve the share link and try again. (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
     }
   }
 }
@@ -688,70 +752,86 @@ export interface DownloadTarget {
   filename: string;
 }
 
-export async function resolveDownload(
-  url: string,
+/**
+ * Downloads one file (or a same-folder batch) from an already-open
+ * ShareSession. Safe to call repeatedly against the same session for
+ * multiple files — only re-navigates folders and re-triggers the download,
+ * without reloading the share page or re-walking the tree.
+ */
+export async function downloadFromSession(
+  session: ShareSession,
   fsIds: string[],
   filename?: string,
 ): Promise<DownloadTarget> {
   if (fsIds.length === 0) {
     throw new TeraboxError("No files selected.", 400);
   }
+  const { page, tree, ancestorMap } = session;
+  const flat = flatten(tree);
+  const byId = new Map(flat.map((n) => [n.fsId, n]));
 
-  const context = await newContext();
-  try {
-    const page = await context.newPage();
-    const params = await captureListParams(page, url);
-    const ancestorMap: AncestorMap = new Map();
-    const tree = await walk(page, params, "/", 0, [], ancestorMap);
-    const flat = flatten(tree);
-    const byId = new Map(flat.map((n) => [n.fsId, n]));
+  const targets = fsIds.map((id) => {
+    const node = byId.get(id);
+    if (!node) {
+      throw new TeraboxError(`File ${id} was not found in this share.`, 400);
+    }
+    return node;
+  });
 
-    const targets = fsIds.map((id) => {
-      const node = byId.get(id);
-      if (!node) {
-        throw new TeraboxError(`File ${id} was not found in this share.`, 400);
-      }
-      return node;
-    });
-
-    const ancestorKeys = new Set(
-      targets.map((n) => JSON.stringify(ancestorMap.get(n.fsId) ?? [])),
+  const ancestorKeys = new Set(
+    targets.map((n) => JSON.stringify(ancestorMap.get(n.fsId) ?? [])),
+  );
+  if (ancestorKeys.size > 1) {
+    throw new TeraboxError(
+      "Please select files from a single folder at a time.",
+      400,
     );
-    if (ancestorKeys.size > 1) {
-      throw new TeraboxError(
-        "Please select files from a single folder at a time.",
-        400,
-      );
-    }
-    const ancestorNames = ancestorMap.get(targets[0]!.fsId) ?? [];
+  }
+  const ancestorNames = ancestorMap.get(targets[0]!.fsId) ?? [];
 
-    await navigateIntoFolder(page, ancestorNames);
+  await navigateIntoFolder(page, ancestorNames);
 
-    let siblingOrder = tree;
-    for (const name of ancestorNames) {
-      const folder = siblingOrder.find((n) => n.isDir && n.name === name);
-      siblingOrder = folder?.children ?? [];
-    }
+  let siblingOrder = tree;
+  for (const name of ancestorNames) {
+    const folder = siblingOrder.find((n) => n.isDir && n.name === name);
+    siblingOrder = folder?.children ?? [];
+  }
 
-    const result = await triggerDownload(page, new Set(fsIds), siblingOrder);
-    const defaultName =
-      targets.length === 1 ? targets[0]!.name : `${filename ?? "download"}.zip`;
-    const finalName = filename && targets.length === 1 ? filename : defaultName;
+  const result = await triggerDownload(page, new Set(fsIds), siblingOrder);
+  const defaultName =
+    targets.length === 1 ? targets[0]!.name : `${filename ?? "download"}.zip`;
+  const finalName = filename && targets.length === 1 ? filename : defaultName;
 
-    // Hand the signed URL straight back to the browser so the end user's own
-    // IP performs the actual byte fetch. Do NOT proxy the bytes through this
-    // server — our egress IP may be blocked by TeraBox's CDN, and even when
-    // it isn't, the signed dlink is tied to the session that generated it.
-    // A dead/banned TERABOX_COOKIE session will produce a dlink that fails
-    // with error_code 31045 on the user's device — the pre-flight health
-    // check above should catch this before we ever reach this point.
-    return {
-      url: result.dlink,
-      isZip: result.isZip,
-      filename: finalName,
-    };
+  // Hand the signed URL straight back to the browser so the end user's own
+  // IP performs the actual byte fetch. Do NOT proxy the bytes through this
+  // server — our egress IP may be blocked by TeraBox's CDN, and even when
+  // it isn't, the signed dlink is tied to the session that generated it.
+  // A dead/banned TERABOX_COOKIE session will produce a dlink that fails
+  // with error_code 31045 on the user's device — the pre-flight health
+  // check above should catch this before we ever reach this point.
+  return {
+    url: result.dlink,
+    isZip: result.isZip,
+    filename: finalName,
+  };
+}
+
+/**
+ * Convenience one-shot wrapper: opens a session, downloads a single target,
+ * closes the session. Use openShareSession + downloadFromSession directly
+ * when downloading multiple files from the same share (e.g. batch "download
+ * all") to avoid re-resolving the share for every file.
+ */
+export async function resolveDownload(
+  url: string,
+  fsIds: string[],
+  filename?: string,
+): Promise<DownloadTarget> {
+  const session = await openShareSession(url);
+  try {
+    return await downloadFromSession(session, fsIds, filename);
   } finally {
-    await context.close();
+    await closeShareSession(session);
   }
 }
 
