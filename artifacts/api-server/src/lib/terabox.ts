@@ -35,9 +35,17 @@ const USER_AGENT =
 
 export class TeraboxError extends Error {
   status: number;
-  constructor(message: string, status = 502) {
+  // Set when the failure looks like page-render flakiness rather than a
+  // structural/permanent problem (e.g. TeraBox's UI occasionally renders a
+  // download page whose button never wires up to a real request — reloading
+  // and trying again from a clean render often succeeds). Callers can retry
+  // once automatically when this is true; errors that are provably permanent
+  // (file not found, account/session dead, size-cap hit) leave it unset.
+  retryable: boolean;
+  constructor(message: string, status = 502, retryable = false) {
     super(message);
     this.status = status;
+    this.retryable = retryable;
   }
 }
 
@@ -735,12 +743,22 @@ async function triggerDownload(
       // files succeeds, ~86MB across 5 files silently fails on the same
       // share link. There's no clean way to detect the exact cap up front,
       // so surface this as an actionable message instead of a generic one.
+      // Not retryable: reloading won't change the account's size cap.
       throw new TeraboxError(
         "TeraBox couldn't prepare this batch as a zip — likely because the combined file size is over what this account tier allows for one download. Try downloading fewer files at a time.",
       );
     }
+    // Empirically, TeraBox sometimes renders a single-file download page (or
+    // a checkbox-selection page) where the button never wires up to a real
+    // request on the first render — no error, no dialog, just silence. A
+    // clean reload of the exact same page/session frequently produces a
+    // working button on the very next attempt. Mark this specific failure
+    // mode retryable so the caller can reload and try once more before
+    // reporting it to the user as a real "different account" restriction.
     throw new TeraboxError(
       "TeraBox did not return a download link. The share link may require a different account or has expired.",
+      502,
+      true,
     );
   }
   return captured;
@@ -797,7 +815,25 @@ export async function downloadFromSession(
     siblingOrder = folder?.children ?? [];
   }
 
-  const result = await triggerDownload(page, new Set(fsIds), siblingOrder);
+  let result: DownloadResult;
+  try {
+    result = await triggerDownload(page, new Set(fsIds), siblingOrder);
+  } catch (err) {
+    if (!(err instanceof TeraboxError) || !err.retryable) throw err;
+    // Reload the exact same page fresh and try the whole select+click flow
+    // again once — this specific failure mode (button present, zero network
+    // calls) has repeatedly turned out to be a one-off bad render rather
+    // than a real per-share restriction, and a clean reload usually fixes
+    // it without needing a brand new browser session.
+    logger.warn(
+      { url: page.url() },
+      "TeraBox triggerDownload failed with a retryable error, reloading page and trying once more",
+    );
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+    await navigateIntoFolder(page, ancestorNames);
+    result = await triggerDownload(page, new Set(fsIds), siblingOrder);
+  }
   const defaultName =
     targets.length === 1 ? targets[0]!.name : `${filename ?? "download"}.zip`;
   const finalName = filename && targets.length === 1 ? filename : defaultName;
