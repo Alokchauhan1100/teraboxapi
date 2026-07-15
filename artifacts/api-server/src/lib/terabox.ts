@@ -443,17 +443,51 @@ async function walk(
   return results;
 }
 
+function isTransientNetworkError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("ERR_TIMED_OUT") ||
+    msg.includes("ERR_CONNECTION_") ||
+    msg.includes("ERR_NAME_NOT_RESOLVED") ||
+    msg.includes("ERR_NETWORK_CHANGED") ||
+    msg.includes("ERR_SOCKET_NOT_CONNECTED")
+  );
+}
+
+// Some hosting providers have flaky (rather than permanently blocked)
+// outbound connectivity to TeraBox's servers — a goto() will occasionally
+// hard-timeout (net::ERR_TIMED_OUT) even though the very next attempt from a
+// fresh context succeeds. Retry a couple of times on those specific
+// transient network errors before giving up, since a single failed
+// connection attempt isn't proof of a permanent block.
+const MAX_RESOLVE_ATTEMPTS = 3;
+
 export async function resolveShare(url: string): Promise<ResolvedShare> {
-  const context = await newContext();
-  try {
-    const page = await context.newPage();
-    const params = await captureListParams(page, url);
-    const tree = await walk(page, params, "/", 0, [], new Map());
-    const title = await page.title();
-    return { title: title || "TeraBox share", tree };
-  } finally {
-    await context.close();
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_RESOLVE_ATTEMPTS; attempt++) {
+    const context = await newContext();
+    try {
+      const page = await context.newPage();
+      const params = await captureListParams(page, url);
+      const tree = await walk(page, params, "/", 0, [], new Map());
+      const title = await page.title();
+      return { title: title || "TeraBox share", tree };
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_RESOLVE_ATTEMPTS && isTransientNetworkError(err)) {
+        logger.warn(
+          { attempt, url },
+          "TeraBox resolveShare hit a transient network error, retrying",
+        );
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+        continue;
+      }
+      throw err;
+    } finally {
+      await context.close();
+    }
   }
+  throw lastErr;
 }
 
 function flatten(nodes: TeraboxNode[]): TeraboxNode[] {
